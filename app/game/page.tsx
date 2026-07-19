@@ -348,6 +348,24 @@ export default function GamePage() {
             </span>
             {gs.nullifyCards > 0 && <span className="text-blue-400">🛡{gs.nullifyCards}</span>}
           </div>
+          {gs.currentTurn > 0 && (() => {
+            const timeDiff = getPaceDiffSeconds(gs)
+            const totalUsed = gs.budgetLimit - budgetRemaining
+            const remainingTurns = MAX_TURNS - gs.currentTurn
+            const budgetDiff = remainingTurns > 0
+              ? Math.round(totalUsed / gs.currentTurn) - Math.round(budgetRemaining / remainingTurns)
+              : 0
+            const timeLabel = timeDiff > 60 ? `+${Math.round(timeDiff/60)}分 遅れ` : timeDiff < -60 ? `-${Math.abs(Math.round(timeDiff/60))}分 早い` : '順調'
+            const budgetLabel = budgetDiff > 500 ? `+¥${Math.round(budgetDiff/100)*100} 多め` : budgetDiff < -500 ? `-¥${Math.abs(Math.round(budgetDiff/100)*100)} 余裕` : '順調'
+            const timeColor = timeDiff > 60 ? 'text-red-400' : timeDiff < -60 ? 'text-green-400' : 'text-zinc-500'
+            const budgetColor = budgetDiff > 500 ? 'text-red-400' : budgetDiff < -500 ? 'text-green-400' : 'text-zinc-500'
+            return (
+              <div className="flex justify-between mt-1 text-xs font-mono">
+                <span className={timeColor}>⏱ {timeLabel}</span>
+                <span className={budgetColor}>💴 {budgetLabel}</span>
+              </div>
+            )
+          })()}
         </div>
       </header>
 
