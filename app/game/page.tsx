@@ -265,8 +265,8 @@ export default function GamePage() {
 
       {/* ===== 旅程：横スクロール連鎖表示 ===== */}
       {gs.turns.length > 0 && (
-        <div className="bg-zinc-950 border-b border-zinc-800 px-3 py-1.5 overflow-x-auto">
-          <div className="flex items-center gap-1 whitespace-nowrap text-xs font-mono">
+        <div className="bg-zinc-950 border-b border-zinc-800 px-3 py-1.5">
+          <div className="flex flex-wrap items-center gap-1 text-xs font-mono">
             <span className="text-zinc-600">{gs.startStation}</span>
             {gs.turns.map(t => (
               <span key={t.turnNumber} className="flex items-center gap-1">
