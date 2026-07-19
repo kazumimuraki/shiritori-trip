@@ -29,7 +29,7 @@ export default function GamePage() {
   const [displayStation, setDisplayStation] = useState('')
   const [isFlapping, setIsFlapping] = useState(false)
   const [currentCard, setCurrentCard] = useState<Card | null>(null)
-  const [showCandidates, setShowCandidates] = useState(false)
+  const [showCandidates, setShowCandidates] = useState(true)
   const [candidateInput, setCandidateInput] = useState('')
   const [showBudgetModal, setShowBudgetModal] = useState(false)
   const [showBudgetDetail, setShowBudgetDetail] = useState(false)
@@ -345,15 +345,8 @@ export default function GamePage() {
 
             {/* 候補メモ帳 */}
             <div className="bg-zinc-900 rounded-lg border border-zinc-800">
-              <button
-                onClick={() => setShowCandidates(!showCandidates)}
-                className="w-full px-3 py-2 flex items-center justify-between text-xs font-mono text-zinc-400 hover:text-zinc-200"
-              >
-                <span>📝 候補メモ帳（{gs.candidates.length}件）</span>
-                <span>{showCandidates ? '▲' : '▼'}</span>
-              </button>
-              {showCandidates && (
-                <div className="px-3 pb-3 space-y-2">
+              <div className="px-3 pt-2 pb-1 text-xs font-mono text-zinc-500 tracking-widest">📝 候補メモ帳</div>
+              <div className="px-3 pb-3 space-y-2">
                   {/* 候補追加フィールド */}
                   <div className="flex gap-2">
                     <input
@@ -402,36 +395,7 @@ export default function GamePage() {
                     </div>
                   )}
                 </div>
-              )}
             </div>
-
-            {/* 無力化カード使用 */}
-            {gs.nullifyCards > 0 && (
-              <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-3">
-                <div className="text-xs text-zinc-500 font-mono tracking-widest mb-2">
-                  🛡 NULLIFY（手持ち{gs.nullifyCards}枚）
-                </div>
-                {!showNullifyMenu ? (
-                  <button onClick={() => setShowNullifyMenu(true)}
-                    className="w-full py-2 border border-blue-800 text-blue-400 rounded text-sm font-mono hover:border-blue-500">
-                    無力化カードを使う
-                  </button>
-                ) : (
-                  <div className="space-y-2">
-                    <button onClick={() => handleUseNullify(1)} disabled={gs.nullifyCards < 1}
-                      className="w-full py-2 bg-blue-950 border border-blue-700 text-blue-300 rounded text-sm font-mono disabled:opacity-30">
-                      1枚（通常ミッションをスキップ）
-                    </button>
-                    <button onClick={() => handleUseNullify(2)} disabled={gs.nullifyCards < 2}
-                      className="w-full py-2 bg-blue-950 border border-blue-700 text-blue-300 rounded text-sm font-mono disabled:opacity-30">
-                      2枚（ワープ / 5の倍数ルールをスキップ）
-                    </button>
-                    <button onClick={() => setShowNullifyMenu(false)}
-                      className="w-full py-1 text-zinc-600 text-xs font-mono">キャンセル</button>
-                  </div>
-                )}
-              </div>
-            )}
 
             {/* 支出ボタン + 履歴ボタン */}
             <div className="flex gap-2">
@@ -483,12 +447,6 @@ export default function GamePage() {
                 カードを引く
               </button>
             </div>
-            {gs.nullifyCards >= 1 && (
-              <button onClick={() => handleCardDone(null, { nullifyCost: 1, skipCard: true })}
-                className="w-full py-2 border border-blue-800 text-blue-400 rounded text-sm font-mono hover:border-blue-500">
-                🛡 1枚使ってミッションスキップ
-              </button>
-            )}
           </div>
         )}
 
