@@ -1,65 +1,75 @@
-import Image from "next/image";
+'use client'
 
-export default function Home() {
+import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { loadGameState, clearGameState } from '@/lib/gameState'
+
+export default function HomePage() {
+  const router = useRouter()
+  const [existingGame, setExistingGame] = useState(false)
+
+  useEffect(() => {
+    const state = loadGameState()
+    if (state && state.gameId) {
+      setExistingGame(true)
+    }
+  }, [])
+
+  function handleNew() {
+    clearGameState()
+    router.push('/roulette')
+  }
+
+  function handleContinue() {
+    router.push('/game')
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
+    <main className="min-h-screen flex flex-col items-center justify-center bg-black px-4">
+      <div className="max-w-sm w-full text-center">
+        {/* タイトル */}
+        <div className="mb-2">
+          <div className="text-xs tracking-[0.4em] text-zinc-500 mb-1">STATION NAME</div>
+          <h1 className="text-4xl font-bold tracking-widest text-yellow-400 mb-1">
+            SHIRITORI
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+          <h2 className="text-2xl font-bold tracking-widest text-white">
+            TRIP
+          </h2>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        <div className="border-t border-zinc-800 my-6" />
+
+        {/* ルール概要 */}
+        <div className="text-left text-xs text-zinc-400 mb-8 space-y-2 bg-zinc-900 rounded-lg p-4 border border-zinc-800">
+          <div className="text-yellow-400 font-bold text-sm mb-2">RULE</div>
+          <div>• 24時間・20ターンの駅名しりとり旅</div>
+          <div>• 各駅でミッションカードを引く</div>
+          <div>• ラッキーカードで時間延長</div>
+          <div>• 5の倍数ターンは県またぎ移動必須</div>
+          <div>• ワープカードは地方移動が発生</div>
         </div>
-      </main>
-    </div>
-  );
+
+        {existingGame && (
+          <button
+            onClick={handleContinue}
+            className="w-full mb-3 py-4 bg-zinc-900 border border-yellow-400 text-yellow-400 rounded-lg font-bold tracking-widest text-sm hover:bg-yellow-400 hover:text-black transition-colors"
+          >
+            CONTINUE
+          </button>
+        )}
+
+        <button
+          onClick={handleNew}
+          className="w-full py-4 bg-yellow-400 text-black rounded-lg font-bold tracking-widest text-sm hover:bg-yellow-300 transition-colors"
+        >
+          NEW GAME
+        </button>
+
+        <div className="mt-8 text-xs text-zinc-700 tracking-widest">
+          CRRA / IRIS SYSTEM
+        </div>
+      </div>
+    </main>
+  )
 }
