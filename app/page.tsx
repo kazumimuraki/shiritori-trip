@@ -27,6 +27,10 @@ export default function HomePage() {
   return (
     <main className="min-h-screen flex flex-col items-center justify-center bg-black px-4">
       <div className="max-w-sm w-full text-center">
+        {/* CRRAロゴ */}
+        <div className="flex justify-center mb-8">
+          <img src="/crra-logo.png" alt="CRRA" style={{ height: '72px' }} />
+        </div>
         {/* タイトル */}
         <div className="mb-2">
           <div className="text-xs tracking-[0.4em] text-zinc-500 mb-1">STATION NAME</div>
@@ -66,9 +70,6 @@ export default function HomePage() {
           NEW GAME
         </button>
 
-        <div className="mt-8 flex justify-center">
-          <img src="/crra-logo.png" alt="CRRA" style={{ height: '72px' }} />
-        </div>
       </div>
     </main>
   )
