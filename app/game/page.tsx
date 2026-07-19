@@ -36,6 +36,7 @@ export default function GamePage() {
   const [budgetForm, setBudgetForm] = useState({ amount: '', description: '', category: '交通費' as BudgetCategory })
   const [budgetToast, setBudgetToast] = useState('')
   const [showNullifyMenu, setShowNullifyMenu] = useState(false)
+  const [bonusUsed, setBonusUsed] = useState(false)
   const [statusMsg, setStatusMsg] = useState('')
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -116,6 +117,7 @@ export default function GamePage() {
     }
     saveGameState(newGs); setGs(newGs)
     setSelectedStation('')
+    setBonusUsed(false)
     setDisplayStation(name)
     setIsFlapping(true)
     setTimeout(() => setIsFlapping(false), 2500)
@@ -163,6 +165,16 @@ export default function GamePage() {
     } else {
       saveGameState(newGs); setGs(newGs); router.push('/warp')
     }
+  }
+
+  // ===== 濁点・拗音ボーナス =====
+  function handleBonus() {
+    if (!gs || bonusUsed) return
+    const newGs = { ...gs, extensionSeconds: gs.extensionSeconds + 1200 }
+    saveGameState(newGs); setGs(newGs)
+    setBonusUsed(true)
+    setStatusMsg('🎯 +20分！濁点・拗音ボーナス！')
+    supabase.from('shiritori_games').update({ total_extension_minutes: Math.round(newGs.extensionSeconds / 60) }).eq('id', newGs.gameId ?? '').then()
   }
 
   // ===== 候補追加 =====
@@ -546,6 +558,12 @@ export default function GamePage() {
                 📋 履歴
               </button>
             </div>
+            {!bonusUsed && (
+              <button onClick={handleBonus}
+                className="w-full py-2 border border-yellow-700 text-yellow-600 rounded-lg text-sm font-mono hover:border-yellow-400 hover:text-yellow-400 transition-colors">
+                🎯 濁点・拗音引き継ぎボーナス（+20分）
+              </button>
+            )}
             <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
               <div className="text-xs text-zinc-500 font-mono tracking-widest mb-3">MISSION CARD</div>
               <button onClick={handleDrawCard}
