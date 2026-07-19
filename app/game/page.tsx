@@ -167,6 +167,16 @@ export default function GamePage() {
     }
   }
 
+  // ===== カード引き直し（-30分） =====
+  function handleRedrawCard() {
+    if (!gs) return
+    const newGs = { ...gs, extensionSeconds: gs.extensionSeconds - 1800 }
+    saveGameState(newGs); setGs(newGs)
+    setCurrentCard(drawCard())
+    setStatusMsg('⏱ -30分 カード引き直し')
+    supabase.from('shiritori_games').update({ total_extension_minutes: Math.round(newGs.extensionSeconds / 60) }).eq('id', newGs.gameId ?? '').then()
+  }
+
   // ===== 濁点・拗音ボーナス =====
   function handleBonus() {
     if (!gs || bonusUsed) return
@@ -632,6 +642,12 @@ export default function GamePage() {
                     <button onClick={() => handleCardDone(currentCard, { nullifyCost: 1 })}
                       className="w-full py-2 border border-blue-800 text-blue-400 rounded text-sm font-mono hover:border-blue-500">
                       🛡 1枚使ってスキップ
+                    </button>
+                  )}
+                  {remaining > 1800 && (
+                    <button onClick={handleRedrawCard}
+                      className="w-full py-2 border border-zinc-700 text-zinc-500 rounded text-sm font-mono hover:border-red-800 hover:text-red-400 transition-colors">
+                      🔄 引き直し（-30分）
                     </button>
                   )}
                 </div>
