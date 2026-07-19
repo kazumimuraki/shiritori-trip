@@ -63,7 +63,7 @@ export default function LoginPage() {
         </button>
 
         <p className="text-zinc-700 text-xs font-mono">
-          kazumimuraki アカウントでログインしてください
+          このアプリは関係者限定です
         </p>
       </div>
     </main>
