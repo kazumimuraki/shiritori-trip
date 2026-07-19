@@ -1,346 +1,718 @@
 'use client'
 
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import GameHeader from '@/components/GameHeader'
 import SplitFlap from '@/components/SplitFlap'
 import {
-  loadGameState,
-  saveGameState,
-  GameState,
-  getRemainingSeconds,
-  getElapsedSeconds,
-  getPaceDiffSeconds,
+  loadGameState, saveGameState, clearGameState,
+  GameState, TurnRecord, BudgetEntry, BudgetCategory, BUDGET_CATEGORIES,
+  getRemainingSeconds, getElapsedSeconds, getPaceDiffSeconds,
+  formatSeconds, formatDiff, isNextTurn5x, getBudgetRemaining,
   MAX_TURNS,
 } from '@/lib/gameState'
 import { drawCard, Card, getCardColor, getCardBg } from '@/lib/cards'
 import { supabase } from '@/lib/supabase'
 
-type CardPhase = 'idle' | 'drawn'
+type GamePhase = 'input' | 'card_pending' | 'card_drawn'
+
+function formatYen(n: number): string {
+  return `¥${Math.max(0, n).toLocaleString()}`
+}
 
 export default function GamePage() {
   const router = useRouter()
-  const [state, setState] = useState<GameState | null>(null)
+  const [gs, setGs] = useState<GameState | null>(null)
+  const [remaining, setRemaining] = useState(0)
+  const [phase, setPhase] = useState<GamePhase>('input')
   const [stationInput, setStationInput] = useState('')
-  const [confirmedStation, setConfirmedStation] = useState('')
-  const [stationFlap, setStationFlap] = useState(false)
-  const [cardPhase, setCardPhase] = useState<CardPhase>('idle')
+  const [displayStation, setDisplayStation] = useState('')
+  const [isFlapping, setIsFlapping] = useState(false)
   const [currentCard, setCurrentCard] = useState<Card | null>(null)
-  const [statusMsg, setStatusMsg] = useState('')
+  const [showCandidates, setShowCandidates] = useState(false)
+  const [candidateInput, setCandidateInput] = useState('')
+  const [flapCandidate, setFlapCandidate] = useState<string | null>(null)
+  const [showHistory, setShowHistory] = useState(false)
+  const [showBudgetModal, setShowBudgetModal] = useState(false)
+  const [showBudgetDetail, setShowBudgetDetail] = useState(false)
+  const [budgetForm, setBudgetForm] = useState({ amount: '', description: '', category: '交通費' as BudgetCategory })
   const [showNullifyMenu, setShowNullifyMenu] = useState(false)
+  const [statusMsg, setStatusMsg] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // ゲーム状態をリロードしてReact stateに反映
+  const reload = useCallback(() => {
+    const s = loadGameState()
+    if (s) { setGs(s); setRemaining(getRemainingSeconds(s)) }
+    return s
+  }, [])
 
   useEffect(() => {
     const s = loadGameState()
-    if (!s || !s.gameId) {
-      router.push('/')
-      return
-    }
-    setState(s)
-    // 現在ターンの駅名を初期表示
-    if (s.currentTurn === 0) {
-      setConfirmedStation(s.startStation)
-    }
-  }, [router])
+    if (!s?.gameId) { router.push('/'); return }
+    setGs(s)
+    setRemaining(getRemainingSeconds(s))
 
-  if (!state) {
+    // ページ遷移（ワープ等）から戻った時の復元
+    if (s.pendingStation) {
+      setDisplayStation(s.pendingStation)
+      // ワープ完了済みならcard_pendingで戻る（カード引き待ちではなく次のターンへ）
+      if (s.pendingWarpDone) {
+        // ワープ処理は既にwarpページで完了している→カード処理済み扱いでinputへ
+        finishTurnAfterWarp(s)
+      } else {
+        setPhase('card_pending')
+      }
+    }
+  }, [])
+
+  // ワープ完了処理（ワープページから戻った直後）
+  async function finishTurnAfterWarp(s: GameState) {
+    if (!s.pendingStation || !s.pendingWarpDone) return
+    const record: TurnRecord = {
+      turnNumber: s.currentTurn,
+      stationName: s.pendingStation,
+      cardDrawn: '地方ワープカード',
+      cardType: 'warp',
+      warpDestination: s.pendingWarpDone,
+      elapsedSeconds: s.pendingElapsed,
+      paceDiffSeconds: s.pendingPace,
+    }
+    const newGs: GameState = {
+      ...s,
+      turns: [...s.turns, record],
+      pendingStation: null,
+      pendingElapsed: 0,
+      pendingPace: 0,
+      pendingWarpDone: null,
+    }
+    saveGameState(newGs)
+    setGs(newGs)
+    setPhase('input')
+    try {
+      await supabase.from('shiritori_turns').insert({
+        game_id: s.gameId,
+        turn_number: record.turnNumber,
+        station_name: record.stationName,
+        card_drawn: record.cardDrawn,
+        card_type: record.cardType,
+        warp_destination: record.warpDestination,
+        elapsed_seconds: record.elapsedSeconds,
+        pace_diff_seconds: record.paceDiffSeconds,
+      })
+    } catch {}
+  }
+
+  // タイマー
+  useEffect(() => {
+    if (!gs?.startTime) return
+    timerRef.current = setInterval(() => {
+      const s = loadGameState()
+      if (s) setRemaining(getRemainingSeconds(s))
+    }, 1000)
+    return () => { if (timerRef.current) clearInterval(timerRef.current) }
+  }, [gs?.startTime])
+
+  if (!gs) return (
+    <div className="min-h-screen bg-black flex items-center justify-center">
+      <span className="text-zinc-600 tracking-widest">LOADING...</span>
+    </div>
+  )
+
+  const budgetRemaining = getBudgetRemaining(gs)
+  const isComplete = gs.currentTurn >= MAX_TURNS || remaining <= 0
+  const next5x = isNextTurn5x(gs)
+  const currentDisplayStation = gs.pendingStation
+    ?? (gs.turns.length > 0 ? gs.turns[gs.turns.length - 1].stationName : gs.startStation)
+
+  // ===== 到着確定 =====
+  async function handleArrival() {
+    if (!gs || !stationInput.trim()) return
+    const name = stationInput.trim()
+    const elapsed = Math.round(getElapsedSeconds(gs))
+    const pace = Math.round(getPaceDiffSeconds(gs))
+    const nextTurn = gs.currentTurn + 1
+
+    const newGs: GameState = {
+      ...gs,
+      currentTurn: nextTurn,
+      pendingStation: name,
+      pendingElapsed: elapsed,
+      pendingPace: pace,
+      candidates: [],
+    }
+    saveGameState(newGs)
+    setGs(newGs)
+    setStationInput('')
+    setDisplayStation(name)
+    setIsFlapping(true)
+    setTimeout(() => setIsFlapping(false), 2500)
+    setPhase('card_pending')
+    setCurrentCard(null)
+    setStatusMsg('')
+  }
+
+  // ===== カードを引く =====
+  function handleDrawCard() {
+    const card = drawCard()
+    setCurrentCard(card)
+    setPhase('card_drawn')
+  }
+
+  // ===== カード処理完了・DB保存 =====
+  async function handleCardDone(card: Card | null, opts: {
+    luckyExtend?: boolean
+    nullifyAdd?: boolean
+    nullifyCost?: number
+    skipCard?: boolean
+    goWarp?: boolean
+  } = {}) {
+    if (!gs || !gs.pendingStation) return
+
+    let newGs = { ...gs }
+    if (opts.luckyExtend) newGs.extensionSeconds += 3600
+    if (opts.nullifyAdd)  newGs.nullifyCards += 1
+    if (opts.nullifyCost) newGs.nullifyCards -= opts.nullifyCost
+
+    if (!opts.goWarp) {
+      // ワープ以外はここでturnsに記録
+      const record: TurnRecord = {
+        turnNumber: newGs.currentTurn,
+        stationName: newGs.pendingStation!,
+        cardDrawn: card?.title,
+        cardType: card?.type,
+        elapsedSeconds: newGs.pendingElapsed,
+        paceDiffSeconds: newGs.pendingPace,
+      }
+      newGs.turns = [...newGs.turns, record]
+      newGs.pendingStation = null
+      newGs.pendingElapsed = 0
+      newGs.pendingPace = 0
+      saveGameState(newGs)
+      setGs(newGs)
+
+      try {
+        await supabase.from('shiritori_turns').insert({
+          game_id: gs.gameId,
+          turn_number: record.turnNumber,
+          station_name: record.stationName,
+          card_drawn: record.cardDrawn ?? null,
+          card_type: record.cardType ?? null,
+          elapsed_seconds: record.elapsedSeconds,
+          pace_diff_seconds: record.paceDiffSeconds,
+        })
+      } catch {}
+
+      if (opts.luckyExtend) {
+        supabase.from('shiritori_games').update({
+          total_extension_minutes: Math.round(newGs.extensionSeconds / 60)
+        }).eq('id', newGs.gameId).then()
+      }
+
+      if (newGs.currentTurn >= MAX_TURNS) {
+        supabase.from('shiritori_games').update({
+          end_time: new Date().toISOString(), is_complete: true
+        }).eq('id', newGs.gameId).then()
+      }
+
+      setCurrentCard(null)
+      setPhase('input')
+      setStatusMsg(opts.luckyExtend ? '🍀 1時間延長！' : opts.nullifyAdd ? '🛡 無力化カードを追加！' : '')
+    } else {
+      // ワープカード：pendingStationを保持したまま/warpへ
+      saveGameState(newGs)
+      setGs(newGs)
+      router.push('/warp')
+    }
+  }
+
+  // ===== 候補から選択 =====
+  function handleSelectCandidate(station: string) {
+    setStationInput(station)
+    setFlapCandidate(station)
+    setTimeout(() => setFlapCandidate(null), 2000)
+    setShowCandidates(false)
+    inputRef.current?.focus()
+  }
+
+  // ===== 候補追加 =====
+  function handleAddCandidate() {
+    if (!gs || !candidateInput.trim()) return
+    const name = candidateInput.trim()
+    if (gs.candidates.includes(name)) { setCandidateInput(''); return }
+    const newGs = { ...gs, candidates: [...gs.candidates, name] }
+    saveGameState(newGs); setGs(newGs); setCandidateInput('')
+  }
+
+  // ===== 候補削除 =====
+  function handleRemoveCandidate(name: string) {
+    if (!gs) return
+    const newGs = { ...gs, candidates: gs.candidates.filter(c => c !== name) }
+    saveGameState(newGs); setGs(newGs)
+  }
+
+  // ===== 無力化カード使用 =====
+  function handleUseNullify(cost: number) {
+    if (!gs) return
+    if (gs.nullifyCards < cost) { setStatusMsg(`無力化カードが${cost}枚必要です`); return }
+    const newGs = { ...gs, nullifyCards: gs.nullifyCards - cost }
+    saveGameState(newGs); setGs(newGs)
+    setShowNullifyMenu(false)
+    setStatusMsg(`🛡 ${cost}枚使用しました`)
+    if (phase === 'card_drawn') {
+      setCurrentCard(null)
+      setPhase('input')
+    }
+  }
+
+  // ===== 支出追加 =====
+  async function handleAddBudget() {
+    if (!gs) return
+    const amount = parseInt(budgetForm.amount)
+    if (!amount || amount <= 0 || !budgetForm.description.trim()) return
+    const entry: BudgetEntry = {
+      id: Date.now().toString(),
+      amount,
+      description: budgetForm.description.trim(),
+      category: budgetForm.category,
+      createdAt: Date.now(),
+    }
+    const newGs = { ...gs, budget: [...gs.budget, entry] }
+    saveGameState(newGs); setGs(newGs)
+    setBudgetForm({ amount: '', description: '', category: '交通費' })
+    setShowBudgetModal(false)
+    try {
+      await supabase.from('shiritori_budget').insert({
+        game_id: gs.gameId,
+        amount: entry.amount,
+        description: entry.description,
+        category: entry.category,
+        created_at: new Date(entry.createdAt).toISOString(),
+      })
+    } catch {}
+  }
+
+  // ===== ゲーム完了 =====
+  if (isComplete) {
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center">
-        <span className="text-zinc-600 tracking-widest">LOADING...</span>
+      <div className="min-h-screen bg-black flex flex-col items-center justify-center p-4">
+        <div className="max-w-sm w-full space-y-6 text-center">
+          {gs.currentTurn >= MAX_TURNS
+            ? <div className="text-yellow-400 font-mono text-3xl font-bold">🎉 GOAL!</div>
+            : <div className="text-red-400 font-mono text-3xl font-bold">⏰ TIME UP</div>
+          }
+          <div className="bg-zinc-900 rounded-lg p-4 text-left space-y-2">
+            <div className="text-zinc-400 font-mono text-xs">旅の記録</div>
+            <div className="text-white font-mono text-sm">第{gs.currentTurn}ターン / {MAX_TURNS}</div>
+            <div className="text-white font-mono text-sm">使用予算: ¥{(gs.budgetLimit - budgetRemaining).toLocaleString()}</div>
+          </div>
+          <button onClick={() => { clearGameState(); router.push('/') }}
+            className="w-full py-4 bg-yellow-400 text-black rounded-lg font-bold font-mono tracking-widest">
+            ホームへ
+          </button>
+        </div>
       </div>
     )
   }
 
-  const isFiveTurn = state.currentTurn > 0 && state.currentTurn % 5 === 0
-  const isComplete = state.currentTurn >= MAX_TURNS || getRemainingSeconds(state) <= 0
-
-  async function handleArrival() {
-    if (!stationInput.trim()) return
-    const newTurn = state!.currentTurn + 1
-    const elapsed = Math.round(getElapsedSeconds(state!))
-    const paceDiff = Math.round(getPaceDiffSeconds(state!))
-
-    const newState: GameState = {
-      ...state!,
-      currentTurn: newTurn,
-    }
-    saveGameState(newState)
-    setState(newState)
-    setConfirmedStation(stationInput.trim())
-    setStationFlap(true)
-    setStationInput('')
-    setCardPhase('idle')
-    setCurrentCard(null)
-    setStatusMsg('')
-    setTimeout(() => setStationFlap(false), 3000)
-
-    // Supabase保存（失敗してもゲーム継続）
-    try {
-      await supabase.from('shiritori_turns').insert({
-        game_id: state!.gameId,
-        turn_number: newTurn,
-        station_name: stationInput.trim(),
-        elapsed_seconds: elapsed,
-        pace_diff_seconds: paceDiff,
-      })
-    } catch (e) {
-      console.error('Turn save error:', e)
-    }
-
-    inputRef.current?.focus()
-  }
-
-  function handleDrawCard() {
-    const card = drawCard()
-    setCurrentCard(card)
-    setCardPhase('drawn')
-  }
-
-  function handleLucky() {
-    const newState: GameState = {
-      ...state!,
-      extensionSeconds: state!.extensionSeconds + 3600,
-    }
-    saveGameState(newState)
-    setState(newState)
-    setStatusMsg('ラッキー！ 1時間延長されました！')
-    setCardPhase('idle')
-    setCurrentCard(null)
-    // Supabase更新
-    supabase.from('shiritori_games').update({
-      total_extension_minutes: Math.round(newState.extensionSeconds / 60)
-    }).eq('id', newState.gameId).then()
-  }
-
-  function handleNullifyAdd() {
-    const newState: GameState = {
-      ...state!,
-      nullifyCards: state!.nullifyCards + 1,
-    }
-    saveGameState(newState)
-    setState(newState)
-    setStatusMsg('無力化カードを手持ちに追加しました')
-    setCardPhase('idle')
-    setCurrentCard(null)
-  }
-
-  function handleWarp() {
-    // カード情報をsessionStorageに保存してwarpページへ
-    sessionStorage.setItem('warp_triggered', '1')
-    router.push('/warp')
-  }
-
-  function handleUseNullify(cost: number) {
-    if (state!.nullifyCards < cost) {
-      setStatusMsg(`無力化カードが${cost}枚必要です（手持ち: ${state!.nullifyCards}枚）`)
-      return
-    }
-    const newState: GameState = {
-      ...state!,
-      nullifyCards: state!.nullifyCards - cost,
-    }
-    saveGameState(newState)
-    setState(newState)
-    setStatusMsg(`無力化カード${cost}枚を使用しました`)
-    setShowNullifyMenu(false)
-    setCardPhase('idle')
-    setCurrentCard(null)
-  }
-
-  function handleFinish() {
-    supabase.from('shiritori_games').update({
-      end_time: new Date().toISOString(),
-      is_complete: true,
-    }).eq('id', state!.gameId).then()
-    router.push('/')
-  }
-
   return (
     <div className="min-h-screen bg-black flex flex-col">
-      <GameHeader state={state} />
 
-      <main className="flex-1 flex flex-col items-center px-4 py-4 max-w-sm mx-auto w-full">
+      {/* ===== ヘッダー ===== */}
+      <header className="bg-zinc-950 border-b border-zinc-800 sticky top-0 z-50">
+        <div className="max-w-sm mx-auto px-3 py-2">
+          <div className="text-center text-yellow-400 font-mono font-bold text-xs tracking-widest mb-1">
+            SHIRITORI TRIP
+          </div>
+          <div className="flex items-center justify-between text-xs font-mono">
+            <span className="text-yellow-400 font-bold">{formatSeconds(remaining)}</span>
+            <span className="text-zinc-400">第<span className="text-white font-bold">{gs.currentTurn}</span>/{MAX_TURNS}ターン</span>
+            <span
+              className={`font-bold cursor-pointer ${budgetRemaining < 10000 ? 'text-red-400' : 'text-green-400'}`}
+              onClick={() => setShowBudgetDetail(true)}
+            >
+              {formatYen(budgetRemaining)}
+            </span>
+            {gs.nullifyCards > 0 && (
+              <span className="text-blue-400">🛡{gs.nullifyCards}</span>
+            )}
+          </div>
+        </div>
+      </header>
 
-        {/* ゲーム完了 */}
-        {isComplete && (
-          <div className="w-full text-center py-8">
-            <div className="text-yellow-400 text-2xl font-bold tracking-widest mb-4">GOAL!</div>
-            <div className="text-zinc-400 mb-6">20ターン完走おめでとうございます！</div>
-            <button onClick={handleFinish} className="w-full py-4 bg-yellow-400 text-black rounded-lg font-bold tracking-widest">
-              ホームへ戻る
-            </button>
+      {/* ===== メイン ===== */}
+      <main className="flex-1 max-w-sm mx-auto w-full px-4 py-3 space-y-3 pb-8">
+
+        {/* 5の倍数ルール警告（入力フォーム時のみ・次が5x） */}
+        {phase === 'input' && next5x && (
+          <div className="w-full py-2 px-3 bg-red-950 border border-red-700 rounded-lg">
+            <div className="text-red-400 font-mono text-xs font-bold">
+              ⚠️ 次（第{gs.currentTurn + 1}ターン）は県またぎ必須！
+            </div>
+            <div className="text-red-500 font-mono text-xs mt-0.5">
+              前の都道府県と異なる都道府県の駅に移動すること
+            </div>
           </div>
         )}
 
-        {!isComplete && (
+        {/* 現在駅パタパタ */}
+        <div>
+          <div className="text-xs text-zinc-600 font-mono tracking-widest mb-1 text-center">
+            {phase !== 'input'
+              ? `第${gs.currentTurn}ターン 到着駅`
+              : gs.currentTurn === 0 ? '出発駅' : `第${gs.currentTurn}ターン 現在地`}
+          </div>
+          <SplitFlap value={currentDisplayStation} isAnimating={isFlapping} duration={2500} />
+        </div>
+
+        {/* ===== PHASE: 入力 ===== */}
+        {phase === 'input' && (
           <>
-            {/* 5の倍数ターンバナー */}
-            {isFiveTurn && (
-              <div className="w-full mb-4 py-3 bg-red-900 border border-red-500 rounded-lg text-center">
-                <span className="text-red-300 font-bold text-sm tracking-wide">
-                  県またぎ移動必須！
-                </span>
-              </div>
-            )}
-
-            {/* 現在駅パタパタ表示 */}
-            {confirmedStation && (
-              <div className="w-full mb-4">
-                <div className="text-xs text-zinc-500 tracking-widest mb-1 text-center">
-                  {state.currentTurn === 0 ? '出発駅' : `第${state.currentTurn}ターン`}
-                </div>
-                <SplitFlap
-                  value={confirmedStation}
-                  isAnimating={stationFlap}
-                  duration={2500}
-                />
-              </div>
-            )}
-
             {/* 駅名入力 */}
-            <div className="w-full mb-4 bg-zinc-900 rounded-lg border border-zinc-800 p-4">
-              <div className="text-xs text-zinc-500 tracking-widest mb-2">NEXT STATION</div>
+            <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-3">
+              <div className="text-xs text-zinc-500 font-mono tracking-widest mb-2">
+                NEXT STATION（第{gs.currentTurn + 1}ターン）
+              </div>
               <input
                 ref={inputRef}
                 type="text"
                 value={stationInput}
                 onChange={e => setStationInput(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && handleArrival()}
-                placeholder="今いる駅名を入力"
-                className="w-full bg-black border border-zinc-700 rounded px-3 py-3 text-white text-lg font-bold placeholder-zinc-700 focus:outline-none focus:border-yellow-400"
+                placeholder="駅名を入力"
+                className="w-full bg-black border border-zinc-700 rounded px-3 py-3 text-white text-lg font-bold font-mono placeholder-zinc-700 focus:outline-none focus:border-yellow-400"
               />
+              {/* 候補からのパタパタプレビュー */}
+              {flapCandidate && (
+                <div className="mt-2">
+                  <SplitFlap value={flapCandidate} isAnimating={true} duration={1500} />
+                </div>
+              )}
               <button
                 onClick={handleArrival}
                 disabled={!stationInput.trim()}
-                className="w-full mt-3 py-3 bg-yellow-400 text-black rounded font-bold tracking-widest disabled:opacity-40 disabled:cursor-not-allowed hover:bg-yellow-300 transition-colors"
+                className="w-full mt-2 py-3 bg-yellow-400 text-black rounded font-bold font-mono tracking-widest disabled:opacity-30 hover:bg-yellow-300 transition-colors"
               >
-                到着確定
+                到着確定 →
               </button>
             </div>
 
-            {/* ミッションカードエリア */}
-            <div className="w-full mb-4 bg-zinc-900 rounded-lg border border-zinc-800 p-4">
-              <div className="text-xs text-zinc-500 tracking-widest mb-3">MISSION CARD</div>
-
-              {cardPhase === 'idle' && (
-                <button
-                  onClick={handleDrawCard}
-                  className="w-full py-4 border border-zinc-700 rounded-lg text-zinc-300 font-bold tracking-widest hover:border-yellow-400 hover:text-yellow-400 transition-colors"
-                >
-                  カードを引く
-                </button>
-              )}
-
-              {cardPhase === 'drawn' && currentCard && (
-                <div className={`rounded-lg border p-4 ${getCardBg(currentCard.type)} ${getCardColor(currentCard.type)}`}>
-                  <div className="text-xs tracking-widest mb-1 opacity-70">
-                    {currentCard.type === 'normal' && 'MISSION'}
-                    {currentCard.type === 'lucky' && 'LUCKY'}
-                    {currentCard.type === 'warp' && 'WARP'}
-                    {currentCard.type === 'nullify' && 'NULLIFY'}
+            {/* 候補メモ帳（折りたたみ） */}
+            <div className="bg-zinc-900 rounded-lg border border-zinc-800">
+              <button
+                onClick={() => setShowCandidates(!showCandidates)}
+                className="w-full px-3 py-2 flex items-center justify-between text-xs font-mono text-zinc-400 hover:text-zinc-200"
+              >
+                <span>📝 候補メモ帳（{gs.candidates.length}件）</span>
+                <span>{showCandidates ? '▲' : '▼'}</span>
+              </button>
+              {showCandidates && (
+                <div className="px-3 pb-3 space-y-2">
+                  {/* 候補追加 */}
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={candidateInput}
+                      onChange={e => setCandidateInput(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && handleAddCandidate()}
+                      placeholder="駅名を追加"
+                      className="flex-1 bg-black border border-zinc-700 rounded px-2 py-2 text-white text-sm font-mono placeholder-zinc-700 focus:outline-none focus:border-yellow-400"
+                    />
+                    <button
+                      onClick={handleAddCandidate}
+                      disabled={!candidateInput.trim()}
+                      className="px-3 py-2 bg-yellow-400 text-black rounded text-sm font-bold font-mono disabled:opacity-30"
+                    >
+                      追加
+                    </button>
                   </div>
-                  <div className="font-bold text-lg mb-2">{currentCard.title}</div>
-                  <div className="text-sm opacity-80 mb-4">{currentCard.description}</div>
-
-                  {currentCard.type === 'lucky' && (
-                    <button
-                      onClick={handleLucky}
-                      className="w-full py-3 bg-yellow-400 text-black rounded font-bold tracking-widest hover:bg-yellow-300"
-                    >
-                      +1時間ゲット！
-                    </button>
-                  )}
-                  {currentCard.type === 'nullify' && (
-                    <button
-                      onClick={handleNullifyAdd}
-                      className="w-full py-3 bg-blue-600 text-white rounded font-bold tracking-widest hover:bg-blue-500"
-                    >
-                      手持ちに追加
-                    </button>
-                  )}
-                  {currentCard.type === 'warp' && (
-                    <button
-                      onClick={handleWarp}
-                      className="w-full py-3 bg-purple-600 text-white rounded font-bold tracking-widest hover:bg-purple-500"
-                    >
-                      地方ワープルーレットへ
-                    </button>
-                  )}
-                  {currentCard.type === 'normal' && (
-                    <button
-                      onClick={() => { setCardPhase('idle'); setCurrentCard(null) }}
-                      className="w-full py-2 border border-zinc-600 text-zinc-400 rounded text-sm hover:border-zinc-400"
-                    >
-                      確認した
-                    </button>
+                  {/* 候補リスト */}
+                  {gs.candidates.length === 0 ? (
+                    <div className="text-zinc-700 font-mono text-xs text-center py-2">
+                      候補を追加してください
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      {gs.candidates.map(c => (
+                        <div key={c} className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleSelectCandidate(c)}
+                            className="flex-1 text-left px-3 py-2 bg-zinc-800 rounded text-white font-mono text-sm hover:bg-zinc-700 hover:text-yellow-400 transition-colors"
+                          >
+                            {c}
+                          </button>
+                          <button
+                            onClick={() => handleRemoveCandidate(c)}
+                            className="px-2 py-2 text-zinc-600 hover:text-red-400 text-sm font-mono"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
               )}
             </div>
 
             {/* 無力化カード使用 */}
-            {state.nullifyCards > 0 && (
-              <div className="w-full mb-4 bg-zinc-900 rounded-lg border border-zinc-800 p-4">
-                <div className="text-xs text-zinc-500 tracking-widest mb-2">
-                  NULLIFY CARD（手持ち: {state.nullifyCards}枚）
+            {gs.nullifyCards > 0 && (
+              <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-3">
+                <div className="text-xs text-zinc-500 font-mono tracking-widest mb-2">
+                  🛡 NULLIFY（手持ち{gs.nullifyCards}枚）
                 </div>
                 {!showNullifyMenu ? (
                   <button
                     onClick={() => setShowNullifyMenu(true)}
-                    className="w-full py-3 border border-blue-700 text-blue-400 rounded-lg font-bold text-sm hover:border-blue-500 transition-colors"
+                    className="w-full py-2 border border-blue-800 text-blue-400 rounded text-sm font-mono hover:border-blue-500"
                   >
                     無力化カードを使う
                   </button>
                 ) : (
                   <div className="space-y-2">
-                    <button
-                      onClick={() => handleUseNullify(1)}
-                      disabled={state.nullifyCards < 1}
-                      className="w-full py-3 bg-blue-900 border border-blue-600 text-blue-300 rounded-lg font-bold text-sm disabled:opacity-40"
-                    >
-                      1枚使う（ミッション無力化）
+                    <button onClick={() => handleUseNullify(1)} disabled={gs.nullifyCards < 1}
+                      className="w-full py-2 bg-blue-950 border border-blue-700 text-blue-300 rounded text-sm font-mono disabled:opacity-30">
+                      1枚（通常ミッションをスキップ）
                     </button>
-                    <button
-                      onClick={() => handleUseNullify(2)}
-                      disabled={state.nullifyCards < 2}
-                      className="w-full py-3 bg-blue-900 border border-blue-600 text-blue-300 rounded-lg font-bold text-sm disabled:opacity-40"
-                    >
-                      2枚使う（ワープ / 5の倍数ルール無力化）
+                    <button onClick={() => handleUseNullify(2)} disabled={gs.nullifyCards < 2}
+                      className="w-full py-2 bg-blue-950 border border-blue-700 text-blue-300 rounded text-sm font-mono disabled:opacity-30">
+                      2枚（ワープ / 5の倍数ルールをスキップ）
                     </button>
-                    <button
-                      onClick={() => setShowNullifyMenu(false)}
-                      className="w-full py-2 text-zinc-600 text-xs"
-                    >
-                      キャンセル
-                    </button>
+                    <button onClick={() => setShowNullifyMenu(false)}
+                      className="w-full py-1 text-zinc-600 text-xs font-mono">キャンセル</button>
                   </div>
                 )}
               </div>
             )}
 
-            {/* ステータスメッセージ */}
-            {statusMsg && (
-              <div className="w-full mb-4 py-3 bg-zinc-800 rounded-lg text-center text-sm text-zinc-300">
-                {statusMsg}
-              </div>
-            )}
+            {/* 支出追加ボタン */}
+            <button
+              onClick={() => setShowBudgetModal(true)}
+              className="w-full py-2 border border-zinc-700 text-zinc-400 rounded-lg text-sm font-mono hover:border-yellow-400 hover:text-yellow-400 transition-colors"
+            >
+              💴 支出を記録する
+            </button>
 
             {/* ターン進捗バー */}
-            <div className="w-full">
-              <div className="flex justify-between text-xs text-zinc-600 mb-1">
-                <span>TURN {state.currentTurn}</span>
+            <div>
+              <div className="flex justify-between text-xs text-zinc-600 font-mono mb-1">
+                <span>TURN {gs.currentTurn}</span>
                 <span>/ {MAX_TURNS}</span>
               </div>
-              <div className="w-full h-2 bg-zinc-900 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-yellow-400 rounded-full transition-all duration-500"
-                  style={{ width: `${(state.currentTurn / MAX_TURNS) * 100}%` }}
-                />
+              <div className="w-full h-1.5 bg-zinc-900 rounded-full overflow-hidden">
+                <div className="h-full bg-yellow-400 rounded-full transition-all duration-500"
+                  style={{ width: `${(gs.currentTurn / MAX_TURNS) * 100}%` }} />
               </div>
+            </div>
+
+            {/* 旅程履歴（折りたたみ） */}
+            <div className="bg-zinc-900 rounded-lg border border-zinc-800">
+              <button
+                onClick={() => setShowHistory(!showHistory)}
+                className="w-full px-3 py-2 flex items-center justify-between text-xs font-mono text-zinc-400 hover:text-zinc-200"
+              >
+                <span>🗺 旅程（{gs.turns.length}駅 / {MAX_TURNS}）</span>
+                <span>{showHistory ? '▲' : '▼'}</span>
+              </button>
+              {showHistory && (
+                <div className="px-3 pb-3 space-y-0.5 max-h-48 overflow-y-auto">
+                  <div className="text-zinc-700 font-mono text-xs">[0] {gs.startStation} 出発</div>
+                  {gs.turns.map(t => (
+                    <div key={t.turnNumber} className="text-zinc-500 font-mono text-xs">
+                      [{t.turnNumber}] {t.stationName}
+                      {t.cardType === 'lucky' && ' 🍀'}
+                      {t.cardType === 'warp' && ` 🌀→${t.warpDestination || ''}`}
+                      {t.cardType === 'nullify' && ' 🛡'}
+                      {t.cardDrawn && t.cardType === 'normal' && ` ◆${t.cardDrawn}`}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </>
         )}
+
+        {/* ===== PHASE: カード引き待ち ===== */}
+        {phase === 'card_pending' && (
+          <div className="space-y-4">
+            {/* 支出追加（ミッション前に経費記録できるように） */}
+            <button
+              onClick={() => setShowBudgetModal(true)}
+              className="w-full py-2 border border-zinc-700 text-zinc-500 rounded text-sm font-mono hover:border-yellow-400 hover:text-yellow-400"
+            >
+              💴 支出を記録する
+            </button>
+            <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
+              <div className="text-xs text-zinc-500 font-mono tracking-widest mb-3">MISSION CARD</div>
+              <button
+                onClick={handleDrawCard}
+                className="w-full py-5 border-2 border-yellow-400 rounded-lg text-yellow-400 font-bold font-mono text-lg tracking-widest hover:bg-yellow-400 hover:text-black transition-colors"
+              >
+                カードを引く
+              </button>
+            </div>
+            {/* 無力化（ミッションスキップ用） */}
+            {gs.nullifyCards >= 1 && (
+              <button onClick={() => handleCardDone(null, { nullifyCost: 1, skipCard: true })}
+                className="w-full py-2 border border-blue-800 text-blue-400 rounded text-sm font-mono hover:border-blue-500">
+                🛡 1枚使ってミッションスキップ
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* ===== PHASE: カード表示 ===== */}
+        {phase === 'card_drawn' && currentCard && (
+          <div className="space-y-3">
+            <div className={`rounded-lg border p-4 ${getCardBg(currentCard.type)} ${getCardColor(currentCard.type)}`}>
+              <div className="text-xs tracking-widest mb-1 opacity-60 font-mono">
+                {currentCard.type === 'normal' ? 'MISSION' :
+                  currentCard.type === 'lucky' ? '🍀 LUCKY' :
+                    currentCard.type === 'warp' ? '🌀 WARP' : '🛡 NULLIFY'}
+              </div>
+              <div className="font-bold text-xl font-mono mb-2">{currentCard.title}</div>
+              <div className="text-sm opacity-80 mb-4 leading-relaxed">{currentCard.description}</div>
+
+              {currentCard.type === 'lucky' && (
+                <button onClick={() => handleCardDone(currentCard, { luckyExtend: true })}
+                  className="w-full py-3 bg-yellow-400 text-black rounded font-bold font-mono tracking-widest hover:bg-yellow-300">
+                  +1時間ゲット！
+                </button>
+              )}
+              {currentCard.type === 'nullify' && (
+                <button onClick={() => handleCardDone(currentCard, { nullifyAdd: true })}
+                  className="w-full py-3 bg-blue-600 text-white rounded font-bold font-mono tracking-widest hover:bg-blue-500">
+                  手持ちに追加（→{gs.nullifyCards + 1}枚）
+                </button>
+              )}
+              {currentCard.type === 'warp' && (
+                <div className="space-y-2">
+                  <button onClick={() => handleCardDone(currentCard, { goWarp: true })}
+                    className="w-full py-3 bg-purple-600 text-white rounded font-bold font-mono tracking-widest hover:bg-purple-500">
+                    🌀 地方ワープルーレットへ
+                  </button>
+                  {gs.nullifyCards >= 2 && (
+                    <button onClick={() => handleCardDone(currentCard, { nullifyCost: 2 })}
+                      className="w-full py-2 border border-blue-800 text-blue-400 rounded text-sm font-mono hover:border-blue-500">
+                      🛡 2枚使ってワープをスキップ
+                    </button>
+                  )}
+                </div>
+              )}
+              {currentCard.type === 'normal' && (
+                <div className="space-y-2">
+                  <button onClick={() => { setShowBudgetModal(true) }}
+                    className="w-full py-2 border border-zinc-600 text-zinc-400 rounded text-sm font-mono hover:border-yellow-400">
+                    💴 ミッション経費を記録してから完了
+                  </button>
+                  <button onClick={() => handleCardDone(currentCard)}
+                    className="w-full py-3 bg-yellow-400 text-black rounded font-bold font-mono tracking-widest hover:bg-yellow-300">
+                    ミッション完了！ →
+                  </button>
+                  {gs.nullifyCards >= 1 && (
+                    <button onClick={() => handleCardDone(currentCard, { nullifyCost: 1 })}
+                      className="w-full py-2 border border-blue-800 text-blue-400 rounded text-sm font-mono hover:border-blue-500">
+                      🛡 1枚使ってスキップ
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ステータスメッセージ */}
+        {statusMsg && (
+          <div className="w-full py-2 bg-zinc-800 rounded-lg text-center text-sm text-zinc-300 font-mono">
+            {statusMsg}
+          </div>
+        )}
       </main>
+
+      {/* ===== 支出追加モーダル ===== */}
+      {showBudgetModal && (
+        <div className="fixed inset-0 bg-black/80 flex items-end z-50" onClick={() => setShowBudgetModal(false)}>
+          <div className="w-full max-w-sm mx-auto bg-zinc-900 rounded-t-2xl p-5 space-y-4" onClick={e => e.stopPropagation()}>
+            <div className="text-white font-mono font-bold text-sm tracking-widest">💴 支出を記録</div>
+            <input
+              type="number"
+              inputMode="numeric"
+              value={budgetForm.amount}
+              onChange={e => setBudgetForm({ ...budgetForm, amount: e.target.value })}
+              placeholder="金額（円）"
+              className="w-full bg-black border border-zinc-700 rounded px-3 py-3 text-white text-xl font-bold font-mono placeholder-zinc-700 focus:outline-none focus:border-yellow-400"
+            />
+            <input
+              type="text"
+              value={budgetForm.description}
+              onChange={e => setBudgetForm({ ...budgetForm, description: e.target.value })}
+              placeholder="内容（例: ラーメン代）"
+              className="w-full bg-black border border-zinc-700 rounded px-3 py-2 text-white text-sm font-mono placeholder-zinc-700 focus:outline-none focus:border-yellow-400"
+            />
+            <div className="flex flex-wrap gap-2">
+              {BUDGET_CATEGORIES.map(cat => (
+                <button
+                  key={cat}
+                  onClick={() => setBudgetForm({ ...budgetForm, category: cat })}
+                  className={`px-3 py-1 rounded-full text-xs font-mono border transition-colors ${budgetForm.category === cat
+                    ? 'bg-yellow-400 text-black border-yellow-400'
+                    : 'border-zinc-700 text-zinc-400 hover:border-yellow-400'}`}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-3">
+              <button onClick={() => setShowBudgetModal(false)}
+                className="flex-1 py-3 border border-zinc-700 text-zinc-400 rounded font-mono text-sm">
+                キャンセル
+              </button>
+              <button
+                onClick={handleAddBudget}
+                disabled={!budgetForm.amount || !budgetForm.description.trim()}
+                className="flex-1 py-3 bg-yellow-400 text-black rounded font-bold font-mono disabled:opacity-30"
+              >
+                記録する
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== 支出詳細モーダル ===== */}
+      {showBudgetDetail && (
+        <div className="fixed inset-0 bg-black/80 flex items-end z-50" onClick={() => setShowBudgetDetail(false)}>
+          <div className="w-full max-w-sm mx-auto bg-zinc-900 rounded-t-2xl p-5 max-h-[70vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-white font-mono font-bold text-sm tracking-widest">💴 支出一覧</div>
+              <div className="text-yellow-400 font-mono font-bold">{formatYen(budgetRemaining)} 残</div>
+            </div>
+            <div className="flex-1 overflow-y-auto space-y-2">
+              {gs.budget.length === 0 ? (
+                <div className="text-zinc-600 font-mono text-sm text-center py-4">まだ記録なし</div>
+              ) : (
+                [...gs.budget].reverse().map(e => (
+                  <div key={e.id} className="flex items-center justify-between bg-zinc-800 rounded px-3 py-2">
+                    <div>
+                      <div className="text-white font-mono text-sm">{e.description}</div>
+                      <div className="text-zinc-500 font-mono text-xs">{e.category}</div>
+                    </div>
+                    <div className="text-yellow-400 font-mono font-bold">¥{e.amount.toLocaleString()}</div>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="mt-3 pt-3 border-t border-zinc-700 flex justify-between font-mono text-sm">
+              <span className="text-zinc-400">合計使用</span>
+              <span className="text-white font-bold">¥{(gs.budgetLimit - budgetRemaining).toLocaleString()}</span>
+            </div>
+            <button onClick={() => setShowBudgetDetail(false)}
+              className="mt-3 w-full py-3 border border-zinc-700 text-zinc-400 rounded font-mono text-sm">
+              閉じる
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
