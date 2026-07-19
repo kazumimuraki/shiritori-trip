@@ -1,9 +1,13 @@
 import { createClient } from "@supabase/supabase-js"
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? ""
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ""
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+// supabaseUrlが空の時（SSR静的生成時）はダミーURLで初期化。実際のDB呼び出しはclient-sideのみ。
+export const supabase = createClient(
+  supabaseUrl || "https://placeholder.supabase.co",
+  supabaseAnonKey || "placeholder"
+)
 
 // ゲーム開始を記録
 export async function insertGame(gameId: string, startStation: string) {
