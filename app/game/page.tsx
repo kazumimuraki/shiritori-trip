@@ -1,13 +1,13 @@
 'use client'
 
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import SplitFlap from '@/components/SplitFlap'
 import {
   loadGameState, saveGameState, clearGameState,
   GameState, TurnRecord, BudgetEntry, BudgetCategory, BUDGET_CATEGORIES,
   getRemainingSeconds, getElapsedSeconds, getPaceDiffSeconds,
-  formatSeconds, formatDiff, isNextTurn5x, getBudgetRemaining,
+  formatSeconds, isNextTurn5x, getBudgetRemaining,
   MAX_TURNS,
 } from '@/lib/gameState'
 import { drawCard, Card, getCardColor, getCardBg } from '@/lib/cards'
@@ -24,86 +24,53 @@ export default function GamePage() {
   const [gs, setGs] = useState<GameState | null>(null)
   const [remaining, setRemaining] = useState(0)
   const [phase, setPhase] = useState<GamePhase>('input')
-  const [stationInput, setStationInput] = useState('')
+  const [selectedStation, setSelectedStation] = useState('')   // 候補から選択した駅名
+  const [isFlappingNext, setIsFlappingNext] = useState(false)  // NEXT STATIONのパタパタ
   const [displayStation, setDisplayStation] = useState('')
   const [isFlapping, setIsFlapping] = useState(false)
   const [currentCard, setCurrentCard] = useState<Card | null>(null)
   const [showCandidates, setShowCandidates] = useState(false)
   const [candidateInput, setCandidateInput] = useState('')
-  const [flapCandidate, setFlapCandidate] = useState<string | null>(null)
-  const [showHistory, setShowHistory] = useState(false)
   const [showBudgetModal, setShowBudgetModal] = useState(false)
   const [showBudgetDetail, setShowBudgetDetail] = useState(false)
   const [budgetForm, setBudgetForm] = useState({ amount: '', description: '', category: '交通費' as BudgetCategory })
+  const [budgetToast, setBudgetToast] = useState('')
   const [showNullifyMenu, setShowNullifyMenu] = useState(false)
   const [statusMsg, setStatusMsg] = useState('')
-  const inputRef = useRef<HTMLInputElement>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  // ゲーム状態をリロードしてReact stateに反映
-  const reload = useCallback(() => {
-    const s = loadGameState()
-    if (s) { setGs(s); setRemaining(getRemainingSeconds(s)) }
-    return s
-  }, [])
 
   useEffect(() => {
     const s = loadGameState()
     if (!s?.gameId) { router.push('/'); return }
     setGs(s)
     setRemaining(getRemainingSeconds(s))
-
-    // ページ遷移（ワープ等）から戻った時の復元
     if (s.pendingStation) {
       setDisplayStation(s.pendingStation)
-      // ワープ完了済みならcard_pendingで戻る（カード引き待ちではなく次のターンへ）
-      if (s.pendingWarpDone) {
-        // ワープ処理は既にwarpページで完了している→カード処理済み扱いでinputへ
-        finishTurnAfterWarp(s)
-      } else {
-        setPhase('card_pending')
-      }
+      if (s.pendingWarpDone) finishTurnAfterWarp(s)
+      else setPhase('card_pending')
     }
   }, [])
 
-  // ワープ完了処理（ワープページから戻った直後）
   async function finishTurnAfterWarp(s: GameState) {
     if (!s.pendingStation || !s.pendingWarpDone) return
     const record: TurnRecord = {
-      turnNumber: s.currentTurn,
-      stationName: s.pendingStation,
-      cardDrawn: '地方ワープカード',
-      cardType: 'warp',
+      turnNumber: s.currentTurn, stationName: s.pendingStation,
+      cardDrawn: '地方ワープカード', cardType: 'warp',
       warpDestination: s.pendingWarpDone,
-      elapsedSeconds: s.pendingElapsed,
-      paceDiffSeconds: s.pendingPace,
+      elapsedSeconds: s.pendingElapsed, paceDiffSeconds: s.pendingPace,
     }
-    const newGs: GameState = {
-      ...s,
-      turns: [...s.turns, record],
-      pendingStation: null,
-      pendingElapsed: 0,
-      pendingPace: 0,
-      pendingWarpDone: null,
-    }
-    saveGameState(newGs)
-    setGs(newGs)
-    setPhase('input')
+    const newGs: GameState = { ...s, turns: [...s.turns, record], pendingStation: null, pendingElapsed: 0, pendingPace: 0, pendingWarpDone: null }
+    saveGameState(newGs); setGs(newGs); setPhase('input')
     try {
       await supabase.from('shiritori_turns').insert({
-        game_id: s.gameId,
-        turn_number: record.turnNumber,
-        station_name: record.stationName,
-        card_drawn: record.cardDrawn,
-        card_type: record.cardType,
+        game_id: s.gameId, turn_number: record.turnNumber, station_name: record.stationName,
+        card_drawn: record.cardDrawn, card_type: record.cardType,
         warp_destination: record.warpDestination,
-        elapsed_seconds: record.elapsedSeconds,
-        pace_diff_seconds: record.paceDiffSeconds,
+        elapsed_seconds: record.elapsedSeconds, pace_diff_seconds: record.paceDiffSeconds,
       })
     } catch {}
   }
 
-  // タイマー
   useEffect(() => {
     if (!gs?.startTime) return
     timerRef.current = setInterval(() => {
@@ -125,25 +92,29 @@ export default function GamePage() {
   const currentDisplayStation = gs.pendingStation
     ?? (gs.turns.length > 0 ? gs.turns[gs.turns.length - 1].stationName : gs.startStation)
 
+  // ===== 候補タップで選択 =====
+  function handleSelectCandidate(station: string) {
+    setSelectedStation(station)
+    setIsFlappingNext(true)
+    setTimeout(() => setIsFlappingNext(false), 1500)
+  }
+
   // ===== 到着確定 =====
   async function handleArrival() {
-    if (!gs || !stationInput.trim()) return
-    const name = stationInput.trim()
+    if (!gs || !selectedStation.trim()) return
+    const name = selectedStation.trim()
     const elapsed = Math.round(getElapsedSeconds(gs))
     const pace = Math.round(getPaceDiffSeconds(gs))
-    const nextTurn = gs.currentTurn + 1
-
     const newGs: GameState = {
       ...gs,
-      currentTurn: nextTurn,
+      currentTurn: gs.currentTurn + 1,
       pendingStation: name,
       pendingElapsed: elapsed,
       pendingPace: pace,
       candidates: [],
     }
-    saveGameState(newGs)
-    setGs(newGs)
-    setStationInput('')
+    saveGameState(newGs); setGs(newGs)
+    setSelectedStation('')
     setDisplayStation(name)
     setIsFlapping(true)
     setTimeout(() => setIsFlapping(false), 2500)
@@ -154,85 +125,43 @@ export default function GamePage() {
 
   // ===== カードを引く =====
   function handleDrawCard() {
-    const card = drawCard()
-    setCurrentCard(card)
-    setPhase('card_drawn')
+    setCurrentCard(drawCard()); setPhase('card_drawn')
   }
 
-  // ===== カード処理完了・DB保存 =====
+  // ===== カード処理完了 =====
   async function handleCardDone(card: Card | null, opts: {
-    luckyExtend?: boolean
-    nullifyAdd?: boolean
-    nullifyCost?: number
-    skipCard?: boolean
-    goWarp?: boolean
+    luckyExtend?: boolean; nullifyAdd?: boolean; nullifyCost?: number
+    skipCard?: boolean; goWarp?: boolean
   } = {}) {
     if (!gs || !gs.pendingStation) return
-
     let newGs = { ...gs }
     if (opts.luckyExtend) newGs.extensionSeconds += 3600
     if (opts.nullifyAdd)  newGs.nullifyCards += 1
     if (opts.nullifyCost) newGs.nullifyCards -= opts.nullifyCost
 
     if (!opts.goWarp) {
-      // ワープ以外はここでturnsに記録
       const record: TurnRecord = {
-        turnNumber: newGs.currentTurn,
-        stationName: newGs.pendingStation!,
-        cardDrawn: card?.title,
-        cardType: card?.type,
-        elapsedSeconds: newGs.pendingElapsed,
-        paceDiffSeconds: newGs.pendingPace,
+        turnNumber: newGs.currentTurn, stationName: newGs.pendingStation!,
+        cardDrawn: card?.title, cardType: card?.type,
+        elapsedSeconds: newGs.pendingElapsed, paceDiffSeconds: newGs.pendingPace,
       }
       newGs.turns = [...newGs.turns, record]
-      newGs.pendingStation = null
-      newGs.pendingElapsed = 0
-      newGs.pendingPace = 0
-      saveGameState(newGs)
-      setGs(newGs)
-
+      newGs.pendingStation = null; newGs.pendingElapsed = 0; newGs.pendingPace = 0
+      saveGameState(newGs); setGs(newGs)
       try {
         await supabase.from('shiritori_turns').insert({
-          game_id: gs.gameId,
-          turn_number: record.turnNumber,
-          station_name: record.stationName,
-          card_drawn: record.cardDrawn ?? null,
-          card_type: record.cardType ?? null,
-          elapsed_seconds: record.elapsedSeconds,
-          pace_diff_seconds: record.paceDiffSeconds,
+          game_id: gs.gameId, turn_number: record.turnNumber, station_name: record.stationName,
+          card_drawn: record.cardDrawn ?? null, card_type: record.cardType ?? null,
+          elapsed_seconds: record.elapsedSeconds, pace_diff_seconds: record.paceDiffSeconds,
         })
       } catch {}
-
-      if (opts.luckyExtend) {
-        supabase.from('shiritori_games').update({
-          total_extension_minutes: Math.round(newGs.extensionSeconds / 60)
-        }).eq('id', newGs.gameId).then()
-      }
-
-      if (newGs.currentTurn >= MAX_TURNS) {
-        supabase.from('shiritori_games').update({
-          end_time: new Date().toISOString(), is_complete: true
-        }).eq('id', newGs.gameId).then()
-      }
-
-      setCurrentCard(null)
-      setPhase('input')
+      if (opts.luckyExtend) supabase.from('shiritori_games').update({ total_extension_minutes: Math.round(newGs.extensionSeconds / 60) }).eq('id', newGs.gameId).then()
+      if (newGs.currentTurn >= MAX_TURNS) supabase.from('shiritori_games').update({ end_time: new Date().toISOString(), is_complete: true }).eq('id', newGs.gameId).then()
+      setCurrentCard(null); setPhase('input')
       setStatusMsg(opts.luckyExtend ? '🍀 1時間延長！' : opts.nullifyAdd ? '🛡 無力化カードを追加！' : '')
     } else {
-      // ワープカード：pendingStationを保持したまま/warpへ
-      saveGameState(newGs)
-      setGs(newGs)
-      router.push('/warp')
+      saveGameState(newGs); setGs(newGs); router.push('/warp')
     }
-  }
-
-  // ===== 候補から選択 =====
-  function handleSelectCandidate(station: string) {
-    setStationInput(station)
-    setFlapCandidate(station)
-    setTimeout(() => setFlapCandidate(null), 2000)
-    setShowCandidates(false)
-    inputRef.current?.focus()
   }
 
   // ===== 候補追加 =====
@@ -249,6 +178,7 @@ export default function GamePage() {
     if (!gs) return
     const newGs = { ...gs, candidates: gs.candidates.filter(c => c !== name) }
     saveGameState(newGs); setGs(newGs)
+    if (selectedStation === name) setSelectedStation('')
   }
 
   // ===== 無力化カード使用 =====
@@ -256,13 +186,9 @@ export default function GamePage() {
     if (!gs) return
     if (gs.nullifyCards < cost) { setStatusMsg(`無力化カードが${cost}枚必要です`); return }
     const newGs = { ...gs, nullifyCards: gs.nullifyCards - cost }
-    saveGameState(newGs); setGs(newGs)
-    setShowNullifyMenu(false)
+    saveGameState(newGs); setGs(newGs); setShowNullifyMenu(false)
     setStatusMsg(`🛡 ${cost}枚使用しました`)
-    if (phase === 'card_drawn') {
-      setCurrentCard(null)
-      setPhase('input')
-    }
+    if (phase === 'card_drawn') { setCurrentCard(null); setPhase('input') }
   }
 
   // ===== 支出追加 =====
@@ -271,22 +197,21 @@ export default function GamePage() {
     const amount = parseInt(budgetForm.amount)
     if (!amount || amount <= 0 || !budgetForm.description.trim()) return
     const entry: BudgetEntry = {
-      id: Date.now().toString(),
-      amount,
+      id: Date.now().toString(), amount,
       description: budgetForm.description.trim(),
-      category: budgetForm.category,
-      createdAt: Date.now(),
+      category: budgetForm.category, createdAt: Date.now(),
     }
     const newGs = { ...gs, budget: [...gs.budget, entry] }
     saveGameState(newGs); setGs(newGs)
     setBudgetForm({ amount: '', description: '', category: '交通費' })
     setShowBudgetModal(false)
+    // トースト通知
+    setBudgetToast(`記録しました ¥${amount.toLocaleString()}`)
+    setTimeout(() => setBudgetToast(''), 2500)
     try {
       await supabase.from('shiritori_budget').insert({
-        game_id: gs.gameId,
-        amount: entry.amount,
-        description: entry.description,
-        category: entry.category,
+        game_id: gs.gameId, amount: entry.amount,
+        description: entry.description, category: entry.category,
         created_at: new Date(entry.createdAt).toISOString(),
       })
     } catch {}
@@ -298,8 +223,8 @@ export default function GamePage() {
       <div className="min-h-screen bg-black flex flex-col items-center justify-center p-4">
         <div className="max-w-sm w-full space-y-6 text-center">
           {gs.currentTurn >= MAX_TURNS
-            ? <div className="text-yellow-400 font-mono text-3xl font-bold">🎉 GOAL!</div>
-            : <div className="text-red-400 font-mono text-3xl font-bold">⏰ TIME UP</div>
+            ? <div className="text-yellow-400 font-mono text-3xl font-bold">GOAL!</div>
+            : <div className="text-red-400 font-mono text-3xl font-bold">TIME UP</div>
           }
           <div className="bg-zinc-900 rounded-lg p-4 text-left space-y-2">
             <div className="text-zinc-400 font-mono text-xs">旅の記録</div>
@@ -328,22 +253,46 @@ export default function GamePage() {
             <span className="text-yellow-400 font-bold">{formatSeconds(remaining)}</span>
             <span className="text-zinc-400">第<span className="text-white font-bold">{gs.currentTurn}</span>/{MAX_TURNS}ターン</span>
             <span
-              className={`font-bold cursor-pointer ${budgetRemaining < 10000 ? 'text-red-400' : 'text-green-400'}`}
+              className={`font-bold cursor-pointer underline decoration-dotted ${budgetRemaining < 10000 ? 'text-red-400' : 'text-green-400'}`}
               onClick={() => setShowBudgetDetail(true)}
             >
               {formatYen(budgetRemaining)}
             </span>
-            {gs.nullifyCards > 0 && (
-              <span className="text-blue-400">🛡{gs.nullifyCards}</span>
-            )}
+            {gs.nullifyCards > 0 && <span className="text-blue-400">🛡{gs.nullifyCards}</span>}
           </div>
         </div>
       </header>
 
+      {/* ===== 旅程：横スクロール連鎖表示 ===== */}
+      {gs.turns.length > 0 && (
+        <div className="bg-zinc-950 border-b border-zinc-800 px-3 py-1.5 overflow-x-auto">
+          <div className="flex items-center gap-1 whitespace-nowrap text-xs font-mono">
+            <span className="text-zinc-600">{gs.startStation}</span>
+            {gs.turns.map(t => (
+              <span key={t.turnNumber} className="flex items-center gap-1">
+                <span className="text-zinc-700">→</span>
+                <span className={
+                  t.cardType === 'lucky' ? 'text-yellow-400' :
+                  t.cardType === 'warp'  ? 'text-purple-400' :
+                  t.cardType === 'nullify' ? 'text-blue-400' :
+                  'text-zinc-400'
+                }>{t.stationName}</span>
+              </span>
+            ))}
+            {gs.pendingStation && (
+              <span className="flex items-center gap-1">
+                <span className="text-zinc-700">→</span>
+                <span className="text-white font-bold">{gs.pendingStation}</span>
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ===== メイン ===== */}
       <main className="flex-1 max-w-sm mx-auto w-full px-4 py-3 space-y-3 pb-8">
 
-        {/* 5の倍数ルール警告（入力フォーム時のみ・次が5x） */}
+        {/* 5の倍数ルール警告 */}
         {phase === 'input' && next5x && (
           <div className="w-full py-2 px-3 bg-red-950 border border-red-700 rounded-lg">
             <div className="text-red-400 font-mono text-xs font-bold">
@@ -355,7 +304,7 @@ export default function GamePage() {
           </div>
         )}
 
-        {/* 現在駅パタパタ */}
+        {/* 現在地パタパタ */}
         <div>
           <div className="text-xs text-zinc-600 font-mono tracking-widest mb-1 text-center">
             {phase !== 'input'
@@ -368,36 +317,33 @@ export default function GamePage() {
         {/* ===== PHASE: 入力 ===== */}
         {phase === 'input' && (
           <>
-            {/* 駅名入力 */}
+            {/* NEXT STATION エリア：候補から選択 */}
             <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-3">
               <div className="text-xs text-zinc-500 font-mono tracking-widest mb-2">
                 NEXT STATION（第{gs.currentTurn + 1}ターン）
               </div>
-              <input
-                ref={inputRef}
-                type="text"
-                value={stationInput}
-                onChange={e => setStationInput(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleArrival()}
-                placeholder="駅名を入力"
-                className="w-full bg-black border border-zinc-700 rounded px-3 py-3 text-white text-lg font-bold font-mono placeholder-zinc-700 focus:outline-none focus:border-yellow-400"
-              />
-              {/* 候補からのパタパタプレビュー */}
-              {flapCandidate && (
-                <div className="mt-2">
-                  <SplitFlap value={flapCandidate} isAnimating={true} duration={1500} />
+
+              {/* 選択中の駅名プレビュー */}
+              {selectedStation ? (
+                <div className="mb-2">
+                  <SplitFlap value={selectedStation} isAnimating={isFlappingNext} duration={1500} />
+                </div>
+              ) : (
+                <div className="mb-2 py-3 text-center text-zinc-700 font-mono text-sm border border-zinc-800 rounded">
+                  候補から駅を選択してください
                 </div>
               )}
+
               <button
                 onClick={handleArrival}
-                disabled={!stationInput.trim()}
-                className="w-full mt-2 py-3 bg-yellow-400 text-black rounded font-bold font-mono tracking-widest disabled:opacity-30 hover:bg-yellow-300 transition-colors"
+                disabled={!selectedStation.trim()}
+                className="w-full py-3 bg-yellow-400 text-black rounded font-bold font-mono tracking-widest disabled:opacity-30 hover:bg-yellow-300 transition-colors"
               >
                 到着確定 →
               </button>
             </div>
 
-            {/* 候補メモ帳（折りたたみ） */}
+            {/* 候補メモ帳 */}
             <div className="bg-zinc-900 rounded-lg border border-zinc-800">
               <button
                 onClick={() => setShowCandidates(!showCandidates)}
@@ -408,7 +354,7 @@ export default function GamePage() {
               </button>
               {showCandidates && (
                 <div className="px-3 pb-3 space-y-2">
-                  {/* 候補追加 */}
+                  {/* 候補追加フィールド */}
                   <div className="flex gap-2">
                     <input
                       type="text"
@@ -426,7 +372,7 @@ export default function GamePage() {
                       追加
                     </button>
                   </div>
-                  {/* 候補リスト */}
+                  {/* 候補リスト（タップで選択確定） */}
                   {gs.candidates.length === 0 ? (
                     <div className="text-zinc-700 font-mono text-xs text-center py-2">
                       候補を追加してください
@@ -437,9 +383,13 @@ export default function GamePage() {
                         <div key={c} className="flex items-center gap-2">
                           <button
                             onClick={() => handleSelectCandidate(c)}
-                            className="flex-1 text-left px-3 py-2 bg-zinc-800 rounded text-white font-mono text-sm hover:bg-zinc-700 hover:text-yellow-400 transition-colors"
+                            className={`flex-1 text-left px-3 py-2 rounded font-mono text-sm transition-colors ${
+                              selectedStation === c
+                                ? 'bg-yellow-400 text-black font-bold'
+                                : 'bg-zinc-800 text-white hover:bg-zinc-700 hover:text-yellow-400'
+                            }`}
                           >
-                            {c}
+                            {selectedStation === c ? '✓ ' : ''}{c}
                           </button>
                           <button
                             onClick={() => handleRemoveCandidate(c)}
@@ -462,10 +412,8 @@ export default function GamePage() {
                   🛡 NULLIFY（手持ち{gs.nullifyCards}枚）
                 </div>
                 {!showNullifyMenu ? (
-                  <button
-                    onClick={() => setShowNullifyMenu(true)}
-                    className="w-full py-2 border border-blue-800 text-blue-400 rounded text-sm font-mono hover:border-blue-500"
-                  >
+                  <button onClick={() => setShowNullifyMenu(true)}
+                    className="w-full py-2 border border-blue-800 text-blue-400 rounded text-sm font-mono hover:border-blue-500">
                     無力化カードを使う
                   </button>
                 ) : (
@@ -485,13 +433,21 @@ export default function GamePage() {
               </div>
             )}
 
-            {/* 支出追加ボタン */}
-            <button
-              onClick={() => setShowBudgetModal(true)}
-              className="w-full py-2 border border-zinc-700 text-zinc-400 rounded-lg text-sm font-mono hover:border-yellow-400 hover:text-yellow-400 transition-colors"
-            >
-              💴 支出を記録する
-            </button>
+            {/* 支出ボタン + 履歴ボタン */}
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowBudgetModal(true)}
+                className="flex-1 py-2 border border-zinc-700 text-zinc-400 rounded-lg text-sm font-mono hover:border-yellow-400 hover:text-yellow-400 transition-colors"
+              >
+                💴 支出を記録
+              </button>
+              <button
+                onClick={() => setShowBudgetDetail(true)}
+                className="px-4 py-2 border border-zinc-700 text-zinc-400 rounded-lg text-sm font-mono hover:border-zinc-500 hover:text-zinc-200 transition-colors"
+              >
+                📋 履歴
+              </button>
+            </div>
 
             {/* ターン進捗バー */}
             <div>
@@ -504,54 +460,29 @@ export default function GamePage() {
                   style={{ width: `${(gs.currentTurn / MAX_TURNS) * 100}%` }} />
               </div>
             </div>
-
-            {/* 旅程履歴（折りたたみ） */}
-            <div className="bg-zinc-900 rounded-lg border border-zinc-800">
-              <button
-                onClick={() => setShowHistory(!showHistory)}
-                className="w-full px-3 py-2 flex items-center justify-between text-xs font-mono text-zinc-400 hover:text-zinc-200"
-              >
-                <span>🗺 旅程（{gs.turns.length}駅 / {MAX_TURNS}）</span>
-                <span>{showHistory ? '▲' : '▼'}</span>
-              </button>
-              {showHistory && (
-                <div className="px-3 pb-3 space-y-0.5 max-h-48 overflow-y-auto">
-                  <div className="text-zinc-700 font-mono text-xs">[0] {gs.startStation} 出発</div>
-                  {gs.turns.map(t => (
-                    <div key={t.turnNumber} className="text-zinc-500 font-mono text-xs">
-                      [{t.turnNumber}] {t.stationName}
-                      {t.cardType === 'lucky' && ' 🍀'}
-                      {t.cardType === 'warp' && ` 🌀→${t.warpDestination || ''}`}
-                      {t.cardType === 'nullify' && ' 🛡'}
-                      {t.cardDrawn && t.cardType === 'normal' && ` ◆${t.cardDrawn}`}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
           </>
         )}
 
         {/* ===== PHASE: カード引き待ち ===== */}
         {phase === 'card_pending' && (
           <div className="space-y-4">
-            {/* 支出追加（ミッション前に経費記録できるように） */}
-            <button
-              onClick={() => setShowBudgetModal(true)}
-              className="w-full py-2 border border-zinc-700 text-zinc-500 rounded text-sm font-mono hover:border-yellow-400 hover:text-yellow-400"
-            >
-              💴 支出を記録する
-            </button>
+            <div className="flex gap-2">
+              <button onClick={() => setShowBudgetModal(true)}
+                className="flex-1 py-2 border border-zinc-700 text-zinc-500 rounded text-sm font-mono hover:border-yellow-400 hover:text-yellow-400">
+                💴 支出を記録
+              </button>
+              <button onClick={() => setShowBudgetDetail(true)}
+                className="px-4 py-2 border border-zinc-700 text-zinc-500 rounded text-sm font-mono hover:border-zinc-500">
+                📋 履歴
+              </button>
+            </div>
             <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
               <div className="text-xs text-zinc-500 font-mono tracking-widest mb-3">MISSION CARD</div>
-              <button
-                onClick={handleDrawCard}
-                className="w-full py-5 border-2 border-yellow-400 rounded-lg text-yellow-400 font-bold font-mono text-lg tracking-widest hover:bg-yellow-400 hover:text-black transition-colors"
-              >
+              <button onClick={handleDrawCard}
+                className="w-full py-5 border-2 border-yellow-400 rounded-lg text-yellow-400 font-bold font-mono text-lg tracking-widest hover:bg-yellow-400 hover:text-black transition-colors">
                 カードを引く
               </button>
             </div>
-            {/* 無力化（ミッションスキップ用） */}
             {gs.nullifyCards >= 1 && (
               <button onClick={() => handleCardDone(null, { nullifyCost: 1, skipCard: true })}
                 className="w-full py-2 border border-blue-800 text-blue-400 rounded text-sm font-mono hover:border-blue-500">
@@ -601,10 +532,16 @@ export default function GamePage() {
               )}
               {currentCard.type === 'normal' && (
                 <div className="space-y-2">
-                  <button onClick={() => { setShowBudgetModal(true) }}
-                    className="w-full py-2 border border-zinc-600 text-zinc-400 rounded text-sm font-mono hover:border-yellow-400">
-                    💴 ミッション経費を記録してから完了
-                  </button>
+                  <div className="flex gap-2">
+                    <button onClick={() => setShowBudgetModal(true)}
+                      className="flex-1 py-2 border border-zinc-600 text-zinc-400 rounded text-sm font-mono hover:border-yellow-400">
+                      💴 経費を記録
+                    </button>
+                    <button onClick={() => setShowBudgetDetail(true)}
+                      className="px-3 py-2 border border-zinc-600 text-zinc-400 rounded text-sm font-mono hover:border-zinc-500">
+                      📋
+                    </button>
+                  </div>
                   <button onClick={() => handleCardDone(currentCard)}
                     className="w-full py-3 bg-yellow-400 text-black rounded font-bold font-mono tracking-widest hover:bg-yellow-300">
                     ミッション完了！ →
@@ -621,7 +558,6 @@ export default function GamePage() {
           </div>
         )}
 
-        {/* ステータスメッセージ */}
         {statusMsg && (
           <div className="w-full py-2 bg-zinc-800 rounded-lg text-center text-sm text-zinc-300 font-mono">
             {statusMsg}
@@ -629,14 +565,20 @@ export default function GamePage() {
         )}
       </main>
 
+      {/* ===== トースト通知 ===== */}
+      {budgetToast && (
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 bg-green-900 border border-green-600 text-green-300 font-mono text-sm px-5 py-3 rounded-xl shadow-lg whitespace-nowrap">
+          ✓ {budgetToast}
+        </div>
+      )}
+
       {/* ===== 支出追加モーダル ===== */}
       {showBudgetModal && (
         <div className="fixed inset-0 bg-black/80 flex items-end z-50" onClick={() => setShowBudgetModal(false)}>
           <div className="w-full max-w-sm mx-auto bg-zinc-900 rounded-t-2xl p-5 space-y-4" onClick={e => e.stopPropagation()}>
             <div className="text-white font-mono font-bold text-sm tracking-widest">💴 支出を記録</div>
             <input
-              type="number"
-              inputMode="numeric"
+              type="number" inputMode="numeric"
               value={budgetForm.amount}
               onChange={e => setBudgetForm({ ...budgetForm, amount: e.target.value })}
               placeholder="金額（円）"
@@ -651,13 +593,10 @@ export default function GamePage() {
             />
             <div className="flex flex-wrap gap-2">
               {BUDGET_CATEGORIES.map(cat => (
-                <button
-                  key={cat}
-                  onClick={() => setBudgetForm({ ...budgetForm, category: cat })}
-                  className={`px-3 py-1 rounded-full text-xs font-mono border transition-colors ${budgetForm.category === cat
-                    ? 'bg-yellow-400 text-black border-yellow-400'
-                    : 'border-zinc-700 text-zinc-400 hover:border-yellow-400'}`}
-                >
+                <button key={cat} onClick={() => setBudgetForm({ ...budgetForm, category: cat })}
+                  className={`px-3 py-1 rounded-full text-xs font-mono border transition-colors ${
+                    budgetForm.category === cat ? 'bg-yellow-400 text-black border-yellow-400' : 'border-zinc-700 text-zinc-400 hover:border-yellow-400'
+                  }`}>
                   {cat}
                 </button>
               ))}
@@ -667,11 +606,9 @@ export default function GamePage() {
                 className="flex-1 py-3 border border-zinc-700 text-zinc-400 rounded font-mono text-sm">
                 キャンセル
               </button>
-              <button
-                onClick={handleAddBudget}
+              <button onClick={handleAddBudget}
                 disabled={!budgetForm.amount || !budgetForm.description.trim()}
-                className="flex-1 py-3 bg-yellow-400 text-black rounded font-bold font-mono disabled:opacity-30"
-              >
+                className="flex-1 py-3 bg-yellow-400 text-black rounded font-bold font-mono disabled:opacity-30">
                 記録する
               </button>
             </div>
