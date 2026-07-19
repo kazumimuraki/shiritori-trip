@@ -67,7 +67,7 @@ export default function HomePage() {
         </button>
 
         <div className="mt-8 text-xs text-zinc-700 tracking-widest">
-          CRRA / IRIS SYSTEM
+          CRRA
         </div>
       </div>
     </main>
