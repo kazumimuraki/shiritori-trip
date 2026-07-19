@@ -87,7 +87,8 @@ export default function GamePage() {
   )
 
   const budgetRemaining = getBudgetRemaining(gs)
-  const isComplete = gs.currentTurn >= MAX_TURNS || remaining <= 0
+  const isOverBudget = getBudgetRemaining(gs) < 0
+  const isComplete = (gs.currentTurn >= MAX_TURNS && !gs.pendingStation) || remaining <= 0 || isOverBudget
   const next5x = isNextTurn5x(gs)
   const currentDisplayStation = gs.pendingStation
     ?? (gs.turns.length > 0 ? gs.turns[gs.turns.length - 1].stationName : gs.startStation)
@@ -219,22 +220,109 @@ export default function GamePage() {
 
   // ===== ゲーム完了 =====
   if (isComplete) {
+    const isGoal = gs.currentTurn >= MAX_TURNS && !gs.pendingStation
+    const isTimeover = remaining <= 0
+    const totalUsed = gs.budgetLimit - getBudgetRemaining(gs)
+    const totalElapsed = Math.floor((Date.now() - gs.startTime) / 1000)
+
     return (
-      <div className="min-h-screen bg-black flex flex-col items-center justify-center p-4">
-        <div className="max-w-sm w-full space-y-6 text-center">
-          {gs.currentTurn >= MAX_TURNS
-            ? <div className="text-yellow-400 font-mono text-3xl font-bold">GOAL!</div>
-            : <div className="text-red-400 font-mono text-3xl font-bold">TIME UP</div>
-          }
-          <div className="bg-zinc-900 rounded-lg p-4 text-left space-y-2">
-            <div className="text-zinc-400 font-mono text-xs">旅の記録</div>
-            <div className="text-white font-mono text-sm">第{gs.currentTurn}ターン / {MAX_TURNS}</div>
-            <div className="text-white font-mono text-sm">使用予算: ¥{(gs.budgetLimit - budgetRemaining).toLocaleString()}</div>
+      <div className="min-h-screen bg-black flex flex-col">
+        {/* ヘッダー */}
+        <header className="bg-zinc-950 border-b border-zinc-800 px-4 py-3 text-center">
+          <div className="text-xs tracking-[0.4em] text-zinc-500 font-mono">SHIRITORI TRIP</div>
+        </header>
+
+        <div className="flex-1 overflow-y-auto">
+          <div className="max-w-sm mx-auto px-4 py-6 space-y-5">
+
+            {/* タイトル */}
+            {isGoal ? (
+              <div className="text-center space-y-1">
+                <div className="text-yellow-400 font-mono font-bold text-5xl tracking-widest">GOAL!</div>
+                <div className="text-zinc-400 font-mono text-xs tracking-widest">20駅制覇おめでとう！</div>
+              </div>
+            ) : isOverBudget ? (
+              <div className="text-center space-y-1">
+                <div className="text-red-400 font-mono font-bold text-4xl tracking-widest">BUDGET</div>
+                <div className="text-red-400 font-mono font-bold text-4xl tracking-widest">OVER</div>
+                <div className="text-zinc-500 font-mono text-xs tracking-widest mt-1">予算超過でゲームオーバー</div>
+              </div>
+            ) : (
+              <div className="text-center space-y-1">
+                <div className="text-red-400 font-mono font-bold text-5xl tracking-widest">TIME UP</div>
+                <div className="text-zinc-500 font-mono text-xs tracking-widest mt-1">タイムオーバー</div>
+              </div>
+            )}
+
+            {/* 統計 */}
+            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-3">
+              <div className="text-zinc-500 font-mono text-xs tracking-widest">RESULT</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-black rounded-lg p-3 text-center">
+                  <div className="text-zinc-600 font-mono text-xs mb-1">達成ターン</div>
+                  <div className="text-white font-mono font-bold text-2xl">{gs.currentTurn}<span className="text-zinc-600 text-sm">/{MAX_TURNS}</span></div>
+                </div>
+                <div className="bg-black rounded-lg p-3 text-center">
+                  <div className="text-zinc-600 font-mono text-xs mb-1">所要時間</div>
+                  <div className="text-white font-mono font-bold text-lg">{formatSeconds(totalElapsed)}</div>
+                </div>
+                <div className="bg-black rounded-lg p-3 text-center">
+                  <div className="text-zinc-600 font-mono text-xs mb-1">残り時間</div>
+                  <div className={`font-mono font-bold text-xl ${isTimeover ? 'text-red-400' : 'text-green-400'}`}>
+                    {formatSeconds(remaining)}
+                  </div>
+                </div>
+                <div className="bg-black rounded-lg p-3 text-center">
+                  <div className="text-zinc-600 font-mono text-xs mb-1">残り予算</div>
+                  <div className={`font-mono font-bold text-lg ${isOverBudget ? 'text-red-400' : 'text-yellow-400'}`}>
+                    {formatYen(getBudgetRemaining(gs))}
+                  </div>
+                </div>
+              </div>
+              <div className="border-t border-zinc-800 pt-3 flex justify-between font-mono text-sm">
+                <span className="text-zinc-500">総使用予算</span>
+                <span className="text-white font-bold">¥{totalUsed.toLocaleString()}</span>
+              </div>
+            </div>
+
+            {/* 旅程振り返り */}
+            {gs.turns.length > 0 && (
+              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+                <div className="text-zinc-500 font-mono text-xs tracking-widest mb-3">ROUTE</div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 py-1">
+                    <span className="text-zinc-600 font-mono text-xs w-6 text-right">ST</span>
+                    <span className="text-zinc-500 font-mono text-sm">{gs.startStation}</span>
+                  </div>
+                  {gs.turns.map(t => (
+                    <div key={t.turnNumber} className="flex items-center gap-2 py-1 border-t border-zinc-800">
+                      <span className="text-zinc-600 font-mono text-xs w-6 text-right">{t.turnNumber}</span>
+                      <span className={`font-mono text-sm flex-1 ${
+                        t.cardType === 'lucky'   ? 'text-yellow-400' :
+                        t.cardType === 'warp'    ? 'text-purple-400' :
+                        t.cardType === 'nullify' ? 'text-blue-400'   :
+                        'text-white'
+                      }`}>{t.stationName}</span>
+                      {t.cardType && t.cardType !== 'normal' && (
+                        <span className="text-xs font-mono text-zinc-600">
+                          {t.cardType === 'lucky' ? '🍀' : t.cardType === 'warp' ? '🌀' : t.cardType === 'nullify' ? '🛡' : ''}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <button onClick={() => { clearGameState(); router.push('/') }}
+              className={`w-full py-4 rounded-lg font-bold font-mono tracking-widest text-sm ${
+                isGoal
+                  ? 'bg-yellow-400 text-black hover:bg-yellow-300'
+                  : 'bg-zinc-800 text-white hover:bg-zinc-700'
+              } transition-colors`}>
+              ホームへ
+            </button>
           </div>
-          <button onClick={() => { clearGameState(); router.push('/') }}
-            className="w-full py-4 bg-yellow-400 text-black rounded-lg font-bold font-mono tracking-widest">
-            ホームへ
-          </button>
         </div>
       </div>
     )

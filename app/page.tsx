@@ -66,8 +66,8 @@ export default function HomePage() {
           NEW GAME
         </button>
 
-        <div className="mt-8 text-xs text-zinc-700 tracking-widest">
-          CRRA
+        <div className="mt-8 flex justify-center">
+          <img src="/crra-logo.png" alt="CRRA" style={{ height: '36px', opacity: 0.35 }} />
         </div>
       </div>
     </main>
