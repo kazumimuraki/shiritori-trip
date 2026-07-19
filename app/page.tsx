@@ -67,7 +67,7 @@ export default function HomePage() {
         </button>
 
         <div className="mt-8 flex justify-center">
-          <img src="/crra-logo.png" alt="CRRA" style={{ height: '36px', opacity: 0.35 }} />
+          <img src="/crra-logo.png" alt="CRRA" style={{ height: '72px' }} />
         </div>
       </div>
     </main>
