@@ -40,6 +40,9 @@ export default function LoginPage() {
     <main className="min-h-screen bg-black flex flex-col items-center justify-center p-4">
       <div className="max-w-sm w-full space-y-8 text-center">
         <div>
+          <div className="flex justify-center mb-4">
+            <img src="/crra-logo.png" alt="CRRA" style={{ height: '36px', opacity: 0.85 }} />
+          </div>
           <div className="text-yellow-400 font-mono font-bold" style={{ fontSize: '2.5rem', letterSpacing: '0.2em' }}>
             SHIRITORI
           </div>
